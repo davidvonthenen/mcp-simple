@@ -2,9 +2,9 @@
 
 This project provides a lightweight OpenAI-compatible chat completions API backed by a
 local `llama-cpp-python` model. The agent integrates with Model Context Protocol (MCP)
-tools and ships with a mock news feed that exposes a `fetch_mock_news` tool. Requests
-can therefore drive the local model or allow it to call into the mock news service for
-fresh headlines.
+tools and ships with a financial data service that surfaces SEC filing context. The MCP
+server aggregates Finnhub's earnings calendar alongside Alpha Vantage earnings history,
+exposing tools that answer questions about recent quarterly performance.
 
 ## Prerequisites
 - Python 3.10+
@@ -20,11 +20,14 @@ cp .env.example .env  # update paths and overrides as needed
 
 ## Usage
 
-### Launch the mock MCP news server (optional but recommended)
+### Launch the MCP SEC filings server (optional but recommended)
 ```bash
 make mcp-server
 ```
-The server exposes the `fetch_mock_news` tool over SSE on `http://127.0.0.1:8765/mcp`.
+The server exposes the following tools over SSE on `http://127.0.0.1:8765/mcp`:
+- `sec-filings.get_earnings_calendar`
+- `sec-filings.get_recent_quarters_results`
+- `sec-filings.get_recent_quarters_improvement`
 
 ### Run the agent API
 ```bash
@@ -57,5 +60,5 @@ the model via OpenAI function-calling metadata.
 - There is no retrieval-augmented generation pipeline—responses rely on the LLM and
   any MCP tools it calls during the conversation.
 - Streaming responses are supported when `stream: true` is supplied in the payload.
-- The mock news server logs requests and provides deterministic sample articles for
-  experimentation with MCP.
+- The SEC filings server requires valid `FINNHUB_API_KEY` and `ALPHAVANTAGE_API_KEY`
+  credentials in the environment to service requests.

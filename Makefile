@@ -6,11 +6,12 @@ QUESTION ?= How much did OpenAI purchase Windsurf for?
 
 .PHONY: agent server query client env mcp-server mcp-server-stdio mcp-server-sse
 
+
 mcp-server:
-	$(PYTHON) -m src.mcp_server.news_server --port $(MCP_PORT)
+$(PYTHON) -m src.mcp_server.sec_filings_server --port $(MCP_PORT)
 
 mcp-server-stdio:
-	$(PYTHON) -m src.mcp_server.news_server --stdio
+$(PYTHON) -m src.mcp_server.sec_filings_server --stdio
 
 mcp-server-sse: mcp-server
 
