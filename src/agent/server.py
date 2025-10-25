@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import atexit
 import json
-import re
 import time
 import uuid
 from collections.abc import Sequence
@@ -13,6 +12,13 @@ from flask import Flask, Response, jsonify, request
 
 from ..common.config import Settings, load_settings
 from ..common.logging import get_logger
+from .financial_queries import (
+    IMPROVEMENT_TOOL_SUFFIX,
+    RESULTS_TOOL_SUFFIX,
+    detect_financial_tool_request,
+    format_improvement_summary,
+    format_results_summary,
+)
 from .mcp_client import MCPClient, MCPClientError, MCPInvocationError
 from .tool_bus import ToolBus
 
@@ -182,66 +188,6 @@ if MCP_CLIENT:
     atexit.register(MCP_CLIENT.close)
 
 
-_TOOL_SUFFIX_RESULTS = "get_recent_quarters_results"
-_TOOL_SUFFIX_IMPROVEMENT = "get_recent_quarters_improvement"
-_FINANCIAL_STOPWORDS = {
-    "AND",
-    "ASK",
-    "CAGR",
-    "COMPANY",
-    "COMPARED",
-    "DID",
-    "DOES",
-    "EARNINGS",
-    "HOW",
-    "IMPROVEMENT",
-    "LAST",
-    "MOST",
-    "PLEASE",
-    "PREVIOUS",
-    "QUARTER",
-    "RECENT",
-    "RESULT",
-    "RESULTS",
-    "SHOW",
-    "STOCK",
-    "TELL",
-    "WHAT",
-    "WHEN",
-    "WHERE",
-    "WHICH",
-    "WHO",
-    "WHY",
-}
-_RESULT_KEY_PHRASES = (
-    "last quarter results",
-    "last quarter's results",
-    "earnings last quarter",
-    "results last quarter",
-    "most recent quarter",
-    "latest quarter results",
-    "recent quarter earnings",
-)
-_IMPROVEMENT_CONTEXT_PHRASES = (
-    "last quarter",
-    "previous quarter",
-    "prior quarter",
-)
-_IMPROVEMENT_KEYWORDS = (
-    "improv",
-    "compared",
-    "compare",
-    "versus",
-    "vs",
-    "change",
-    "difference",
-    "growth",
-    "decline",
-    "increase",
-    "decrease",
-)
-
-
 def _resolve_tool_name(suffix: str) -> str | None:
     if not MCP_CLIENT:
         return None
@@ -249,110 +195,6 @@ def _resolve_tool_name(suffix: str) -> str | None:
         if name.endswith(f".{suffix}") or name == suffix:
             return name
     return None
-
-
-def _format_number(value: Any) -> str:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return "n/a"
-    if abs(numeric) >= 100:
-        return f"{numeric:,.2f}"
-    return f"{numeric:.2f}"
-
-
-def _format_percent(value: Any) -> str:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return "n/a"
-    return f"{numeric:+.2f}%"
-
-
-def _extract_candidate_symbol(question: str) -> str | None:
-    if not question:
-        return None
-    dollar_matches = re.findall(r"\$([A-Za-z]{1,5})\b", question)
-    for match in dollar_matches:
-        candidate = match.upper()
-        if candidate and candidate not in _FINANCIAL_STOPWORDS:
-            return candidate
-
-    uppercase_matches = re.findall(r"\b[A-Z]{1,5}\b", question)
-    for match in uppercase_matches:
-        candidate = match.upper()
-        if candidate and candidate not in _FINANCIAL_STOPWORDS:
-            return candidate
-    return None
-
-
-def _detect_financial_tool_request(question: str) -> tuple[str, str] | None:
-    symbol = _extract_candidate_symbol(question)
-    if not symbol:
-        return None
-    lowered = question.lower()
-    if any(context in lowered for context in _IMPROVEMENT_CONTEXT_PHRASES) and any(
-        keyword in lowered for keyword in _IMPROVEMENT_KEYWORDS
-    ):
-        return _TOOL_SUFFIX_IMPROVEMENT, symbol
-    if any(phrase in lowered for phrase in _RESULT_KEY_PHRASES) or (
-        "last quarter" in lowered and any(token in lowered for token in ("earnings", "results", "report"))
-    ):
-        return _TOOL_SUFFIX_RESULTS, symbol
-    return None
-
-
-def _format_results_summary(symbol: str, payload: Mapping[str, Any] | None) -> str:
-    if not isinstance(payload, Mapping):
-        return f"Unexpected response format while fetching quarterly results for {symbol}."
-    quarters = payload.get("quarters")
-    if not isinstance(quarters, list) or not quarters:
-        return f"No quarterly results available for {symbol}."
-    lines = [f"Most recent quarterly earnings for {symbol}:"]
-    for entry in quarters:
-        if not isinstance(entry, Mapping):
-            continue
-        fiscal = entry.get("fiscal_date") or "Unknown fiscal date"
-        reported_eps = _format_number(entry.get("reported_eps"))
-        estimate = entry.get("estimated_eps")
-        estimate_str = _format_number(estimate) if estimate not in (None, "") else "n/a"
-        surprise = entry.get("surprise")
-        surprise_pct = entry.get("surprise_percentage")
-        details = [f"reported EPS {reported_eps}"]
-        if estimate_str != "n/a":
-            details.append(f"estimate {estimate_str}")
-        if surprise not in (None, ""):
-            surprise_value = _format_number(surprise)
-            surprise_pct_value = _format_percent(surprise_pct)
-            details.append(f"surprise {surprise_value} ({surprise_pct_value})")
-        report_time = entry.get("report_time")
-        suffix = f" [{report_time}]" if report_time else ""
-        lines.append(f"- {fiscal}: {', '.join(details)}{suffix}")
-    return "\n".join(lines)
-
-
-def _format_improvement_summary(symbol: str, payload: Mapping[str, Any] | None) -> str:
-    if not isinstance(payload, Mapping):
-        return f"Unexpected response format while evaluating quarterly improvements for {symbol}."
-    comparisons = payload.get("comparisons")
-    if not isinstance(comparisons, list) or not comparisons:
-        return f"No quarterly comparison data available for {symbol}."
-    lines = [f"Quarter-over-quarter EPS change for {symbol}:"]
-    for entry in comparisons:
-        if not isinstance(entry, Mapping):
-            continue
-        current_date = entry.get("fiscal_date") or "current quarter"
-        previous_date = entry.get("previous_fiscal_date") or "previous quarter"
-        previous_eps = _format_number(entry.get("previous_reported_eps"))
-        current_eps = _format_number(entry.get("reported_eps"))
-        change_pct = _format_percent(entry.get("change_percentage"))
-        absolute_change = entry.get("absolute_change")
-        absolute_change_str = _format_number(absolute_change) if absolute_change not in (None, "") else "n/a"
-        lines.append(
-            f"- {previous_date} -> {current_date}: {change_pct} (EPS {previous_eps} -> {current_eps}, "
-            f"Δ {absolute_change_str})"
-        )
-    return "\n".join(lines)
 
 
 def _build_direct_completion(content: str, *, model: str, stream: bool):
@@ -387,7 +229,7 @@ def _build_direct_completion(content: str, *, model: str, stream: bool):
 
 
 def _maybe_handle_direct_financial_query(question: str, *, stream: bool, model: str):
-    detection = _detect_financial_tool_request(question)
+    detection = detect_financial_tool_request(question)
     if not detection:
         return None
     tool_suffix, symbol = detection
@@ -397,16 +239,20 @@ def _maybe_handle_direct_financial_query(question: str, *, stream: bool, model: 
         return None
 
     arguments = {"symbol": symbol}
+    if tool_suffix == RESULTS_TOOL_SUFFIX:
+        arguments["limit"] = 1
+    elif tool_suffix == IMPROVEMENT_TOOL_SUFFIX:
+        arguments["limit"] = 2
     try:
         payload = MCP_CLIENT.invoke(tool_name, arguments) if MCP_CLIENT else None
     except MCPInvocationError as exc:
         LOGGER.exception("MCP invocation failed for %s", tool_name)
         content = f"Unable to retrieve financial data for {symbol}: {exc}"
     else:
-        if tool_suffix == _TOOL_SUFFIX_RESULTS:
-            content = _format_results_summary(symbol, payload)
+        if tool_suffix == RESULTS_TOOL_SUFFIX:
+            content = format_results_summary(symbol, payload)
         else:
-            content = _format_improvement_summary(symbol, payload)
+            content = format_improvement_summary(symbol, payload)
     return _build_direct_completion(content, model=model, stream=stream)
 
 

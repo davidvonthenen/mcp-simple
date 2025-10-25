@@ -294,7 +294,7 @@ def _build_handshake(session_id: str, *, include_url: bool = False) -> Dict[str,
 def _handle_invoke(tool: str, arguments: Mapping[str, object]) -> Dict[str, object]:
     try:
         if tool == "get_earnings_calendar":
-            symbol = str(arguments.get("symbol", "")).strip()
+            symbol = str(arguments.get("symbol", "") or arguments.get("ticker", "")).strip()
             if not symbol:
                 raise ServerError("'symbol' is required")
             from_value = arguments.get("from_date")
@@ -304,7 +304,7 @@ def _handle_invoke(tool: str, arguments: Mapping[str, object]) -> Dict[str, obje
             to_date = _parse_date(str(to_value), default=default_to) if to_value else default_to
             result = _fetch_finnhub_calendar(symbol, from_date, to_date)
         elif tool == "get_recent_quarters_results":
-            symbol = str(arguments.get("symbol", "")).strip()
+            symbol = str(arguments.get("symbol", "") or arguments.get("ticker", "")).strip()
             if not symbol:
                 raise ServerError("'symbol' is required")
             limit = arguments.get("limit", _DEFAULT_QUARTERS_LIMIT)
@@ -315,7 +315,7 @@ def _handle_invoke(tool: str, arguments: Mapping[str, object]) -> Dict[str, obje
             limit_int = max(1, min(limit_int, 8))
             result = _get_recent_quarters_results(symbol, limit=limit_int)
         elif tool == "get_recent_quarters_improvement":
-            symbol = str(arguments.get("symbol", "")).strip()
+            symbol = str(arguments.get("symbol", "") or arguments.get("ticker", "")).strip()
             if not symbol:
                 raise ServerError("'symbol' is required")
             limit = arguments.get("limit", _DEFAULT_QUARTERS_LIMIT)
