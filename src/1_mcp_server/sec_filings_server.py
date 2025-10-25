@@ -176,7 +176,7 @@ def _fetch_finnhub_calendar(symbol: str, from_date: dt.date, to_date: dt.date) -
 
 
 def _fetch_alphavantage_earnings(symbol: str) -> Dict[str, object]:
-    api_key = _require_env("ALPHAVANTAGE_API_KEY")
+    api_key = _require_env("FINNHUB_API_KEY")
     params = {
         "function": "EARNINGS",
         "symbol": symbol.upper(),

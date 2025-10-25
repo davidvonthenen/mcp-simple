@@ -2,26 +2,27 @@ PYTHON ?= python
 HOST ?= 0.0.0.0
 PORT ?= 8000
 MCP_PORT ?= 8765
-QUESTION ?= How much did OpenAI purchase Windsurf for?
+# QUESTION ?= How was Apple's (ticker: AAPL) stock performance in the last quarter?
+QUESTION ?= How was Apple's (ticker: AAPL) stock performance improvement compared to the previous quarter?
 
 .PHONY: agent server query client env mcp-server mcp-server-stdio mcp-server-sse
 
 
 mcp-server:
-$(PYTHON) -m src.mcp_server.sec_filings_server --port $(MCP_PORT)
+	$(PYTHON) -m src.1_mcp_server.sec_filings_server --port $(MCP_PORT)
 
 mcp-server-stdio:
-$(PYTHON) -m src.mcp_server.sec_filings_server --stdio
+	$(PYTHON) -m src.1_mcp_server.sec_filings_server --stdio
 
 mcp-server-sse: mcp-server
 
 agent:
-	MCP_TARGETS="sse:http://127.0.0.1:$(MCP_PORT)/mcp" $(PYTHON) -m src.agent.server
+	MCP_TARGETS="sse:http://127.0.0.1:$(MCP_PORT)/mcp" $(PYTHON) -m src.2_agent.server
 
 server: agent
 
 query:
-	$(PYTHON) -m src.client.client --question "$(QUESTION)"
+	$(PYTHON) -m src.3_client.client --question "$(QUESTION)"
 
 client: query
 
