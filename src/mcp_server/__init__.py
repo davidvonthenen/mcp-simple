@@ -1,1 +1,1 @@
-"""Mock MCP news server used for integration testing."""
+"""MCP server utilities for accessing SEC filings and earnings data."""
