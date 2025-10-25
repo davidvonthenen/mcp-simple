@@ -1,43 +1,41 @@
 PYTHON ?= python
-INDEX ?= bbc
-DATA_DIR ?= ./bbc
 HOST ?= 0.0.0.0
 PORT ?= 8000
+MCP_PORT ?= 8765
 QUESTION ?= How much did OpenAI purchase Windsurf for?
 
-.PHONY: ingest agent server query client env mcp-server mcp-server-stdio mcp-server-sse
-
-ingest:
-	$(PYTHON) -m src.1_ingest.ingest --data-dir $(DATA_DIR) --index-name $(INDEX)
+.PHONY: agent server query client env mcp-server mcp-server-stdio mcp-server-sse
 
 mcp-server:
-	$(PYTHON) -m src.2_mcp_server.news_server --port 8765
+	$(PYTHON) -m src.mcp_server.news_server --port $(MCP_PORT)
 
 mcp-server-stdio:
-	$(PYTHON) -m src.2_mcp_server.news_server --stdio
+	$(PYTHON) -m src.mcp_server.news_server --stdio
 
 mcp-server-sse: mcp-server
 
 agent:
-	MCP_TARGETS="sse:http://127.0.0.1:8765/mcp" $(PYTHON) -m src.3_rag_agent.server
+	MCP_TARGETS="sse:http://127.0.0.1:$(MCP_PORT)/mcp" $(PYTHON) -m src.agent.server
 
 server: agent
 
 query:
-	$(PYTHON) -m src.4_rag_client.client --question "$(QUESTION)"
+	$(PYTHON) -m src.client.client --question "$(QUESTION)"
 
 client: query
 
 env:
-	@echo "OPENSEARCH_HOST=$${OPENSEARCH_HOST:-127.0.0.1}"
-	@echo "OPENSEARCH_PORT=$${OPENSEARCH_PORT:-9200}"
-	@echo "OPENSEARCH_INDEX=$${OPENSEARCH_INDEX:-$(INDEX)}"
-	@echo "EMBEDDING_MODEL_NAME=$${EMBEDDING_MODEL_NAME:-thenlper/gte-small}"
 	@echo "LLAMA_MODEL_PATH=$${LLAMA_MODEL_PATH:-./models/llama.gguf}"
 	@echo "LLAMA_CTX=$${LLAMA_CTX:-8192}"
 	@echo "LLAMA_N_THREADS=$${LLAMA_N_THREADS:-$$($(PYTHON) -c 'import os; print(os.cpu_count() or 1)')}"
 	@echo "LLAMA_N_GPU_LAYERS=$${LLAMA_N_GPU_LAYERS:--1}"
-	@echo "RAG_TOP_K=$${RAG_TOP_K:-5}"
-	@echo "RAG_NUM_CANDIDATES=$${RAG_NUM_CANDIDATES:-50}"
+	@echo "LLAMA_N_BATCH=$${LLAMA_N_BATCH:-256}"
+	@echo "LLAMA_N_UBATCH=$${LLAMA_N_UBATCH:-256}"
+	@echo "LLAMA_LOW_VRAM=$${LLAMA_LOW_VRAM:-1}"
 	@echo "SERVER_HOST=$${SERVER_HOST:-$(HOST)}"
 	@echo "SERVER_PORT=$${SERVER_PORT:-$(PORT)}"
+	@echo "MCP_ENABLED=$${MCP_ENABLED:-1}"
+	@echo "MCP_TARGETS=$${MCP_TARGETS:-sse:http://127.0.0.1:$(MCP_PORT)/mcp}"
+	@echo "MCP_CONNECT_TIMEOUT_SEC=$${MCP_CONNECT_TIMEOUT_SEC:-5.0}"
+	@echo "MCP_INVOCATION_TIMEOUT_SEC=$${MCP_INVOCATION_TIMEOUT_SEC:-15.0}"
+	@echo "MCP_MAX_TOOL_CALL_DEPTH=$${MCP_MAX_TOOL_CALL_DEPTH:-3}"

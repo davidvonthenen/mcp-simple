@@ -1,4 +1,4 @@
-"""Configuration loading utilities for the RAG service."""
+"""Configuration loading utilities for the MCP-enabled agent service."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,26 +13,14 @@ from dotenv import load_dotenv
 class Settings:
     """Runtime configuration parameters for the application."""
 
-    # OpenSearch
-    opensearch_host: str = "127.0.0.1"
-    opensearch_port: int = 9200
-    opensearch_index: str = "bbc"
-
-    # Embeddings
-    embedding_model: str = "thenlper/gte-small"
-
-    # Llama.cpp
+    # Llama.cpp runtime options
     llama_model_path: str = "neural-chat-7b-v3-3.Q4_K_M.gguf"
-    llama_ctx: int = 8192                    # keep conservative by default on laptops
+    llama_ctx: int = 8192
     llama_n_threads: int = max(1, (os.cpu_count() or 4) - 1)
-    llama_n_gpu_layers: int = 20             # modest offload; fallback logic drops to CPU if needed
-    llama_n_batch: int = 256                 # prompt processing batch
-    llama_n_ubatch: Optional[int] = 256      # physical micro-batch; None to let llama.cpp choose
-    llama_low_vram: bool = True              # reduce Metal VRAM usage
-
-    # RAG
-    rag_top_k: int = 3
-    rag_num_candidates: int = 50
+    llama_n_gpu_layers: int = 20
+    llama_n_batch: int = 256
+    llama_n_ubatch: Optional[int] = 256
+    llama_low_vram: bool = True
 
     # Server
     server_host: str = "0.0.0.0"
@@ -75,21 +63,15 @@ def _get_float(name: str, default_val: float) -> float:
 
 def load_settings(env_file: str | None = None) -> Settings:
     """Load settings from environment (.env) with sane defaults."""
-    # Load a .env if present (project root or provided explicit path)
     if env_file:
         load_dotenv(env_file)
     else:
-        # Probe common locations
         for candidate in (Path(".env"), Path(__file__).resolve().parent.parent / ".env"):
             if candidate.exists():
                 load_dotenv(str(candidate))
                 break
 
     return Settings(
-        opensearch_host=os.getenv("OPENSEARCH_HOST", Settings.opensearch_host),
-        opensearch_port=_get_int("OPENSEARCH_PORT", Settings.opensearch_port),
-        opensearch_index=os.getenv("OPENSEARCH_INDEX", Settings.opensearch_index),
-        embedding_model=os.getenv("EMBEDDING_MODEL", Settings.embedding_model),
         llama_model_path=os.getenv(
             "LLAMA_MODEL_PATH",
             str(Path.home() / "models" / Settings.llama_model_path),
@@ -100,8 +82,6 @@ def load_settings(env_file: str | None = None) -> Settings:
         llama_n_batch=_get_int("LLAMA_N_BATCH", Settings.llama_n_batch),
         llama_n_ubatch=_get_int("LLAMA_N_UBATCH", Settings.llama_n_ubatch or 0) or None,
         llama_low_vram=_get_bool("LLAMA_LOW_VRAM", Settings.llama_low_vram),
-        rag_top_k=_get_int("RAG_TOP_K", Settings.rag_top_k),
-        rag_num_candidates=_get_int("RAG_NUM_CANDIDATES", Settings.rag_num_candidates),
         server_host=os.getenv("SERVER_HOST", Settings.server_host),
         server_port=_get_int("SERVER_PORT", Settings.server_port),
         mcp_enabled=_get_bool("MCP_ENABLED", Settings.mcp_enabled),
