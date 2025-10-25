@@ -2,8 +2,8 @@ PYTHON ?= python
 HOST ?= 0.0.0.0
 PORT ?= 8000
 MCP_PORT ?= 8765
-# QUESTION ?= How was Apple's (ticker: AAPL) stock performance in the last quarter?
-QUESTION ?= How was Apple's (ticker: AAPL) stock performance improvement compared to the previous quarter?
+QUESTION ?= How was Apple's (ticker: $AAPL) stock performance in the last quarter?
+# QUESTION ?= How was Apple's (ticker: $AAPL) stock performance improvement compared to the previous quarter?
 
 .PHONY: agent server query client env mcp-server mcp-server-stdio mcp-server-sse
 

@@ -21,7 +21,6 @@ import requests
 LOGGER = logging.getLogger("sec-filings-mcp-server")
 
 FINNHUB_API_BASE = "https://finnhub.io/api/v1"
-ALPHAVANTAGE_API_BASE = "https://www.alphavantage.co/query"
 _DEFAULT_EARNINGS_LOOKAHEAD_DAYS = 30
 _DEFAULT_QUARTERS_LIMIT = 4
 
@@ -175,25 +174,6 @@ def _fetch_finnhub_calendar(symbol: str, from_date: dt.date, to_date: dt.date) -
     }
 
 
-def _fetch_alphavantage_earnings(symbol: str) -> Dict[str, object]:
-    api_key = _require_env("FINNHUB_API_KEY")
-    params = {
-        "function": "EARNINGS",
-        "symbol": symbol.upper(),
-        "apikey": api_key,
-    }
-    payload = _request_json(ALPHAVANTAGE_API_BASE, params)
-
-    if "Error Message" in payload:
-        raise ServerError(str(payload["Error Message"]))
-    if "Note" in payload:
-        raise ServerError(payload["Note"])
-    if "quarterlyEarnings" not in payload:
-        raise ServerError("Alpha Vantage response did not contain 'quarterlyEarnings'.")
-
-    return payload
-
-
 def _safe_float(value: object | None) -> float | None:
     if value in (None, "", "None"):
         return None
@@ -203,29 +183,83 @@ def _safe_float(value: object | None) -> float | None:
         return None
 
 
-def _get_recent_quarters_results(symbol: str, *, limit: int = _DEFAULT_QUARTERS_LIMIT) -> Dict[str, object]:
-    """Return most recent quarterly earnings information for ``symbol``."""
+def _fetch_finnhub_company_earnings(symbol: str, *, limit: int | None = None) -> list[dict]:
+    """
+    Finnhub 'company earnings surprises' for a symbol (most-recent first).
+    Docs: https://finnhub.io/docs/api/company-earnings  (REST: /stock/earnings?symbol=...)
+    """
+    token = _require_env("FINNHUB_API_KEY")
+    params: dict[str, object] = {"symbol": symbol.upper(), "token": token}
+    if isinstance(limit, int) and limit > 0:
+        # Finnhub supports a 'limit' query param to cap returned periods.
+        params["limit"] = limit  # leave unset to get full history
+    payload = _request_json(f"{FINNHUB_API_BASE}/stock/earnings", params)
 
+    _check_finnhub_errors(payload)
+
+    if not isinstance(payload, list):
+        raise ServerError("Unexpected Finnhub payload: expected a list for /stock/earnings.")
+    if not payload:
+        raise ServerError(f"No quarterly earnings data available for {symbol.upper()}.")
+
+    # Deterministic ordering (Finnhub is typically newest-first, but sort defensively).
+    def _parse_period(v: str | None):
+        from datetime import datetime, date
+        try:
+            return datetime.strptime(v or "", "%Y-%m-%d").date()
+        except Exception:
+            return date.min
+
+    payload.sort(key=lambda e: _parse_period(e.get("period")), reverse=True)
+    return payload
+
+
+def _check_finnhub_errors(payload: object) -> None:
+    # Finnhub errors often appear as {"error": "..."} on 200 responses,
+    # and proper HTTP error codes for 401/403/429. Let _request_json handle HTTP.
+    if isinstance(payload, dict) and "error" in payload:
+        raise ServerError(f"Finnhub error: {payload.get('error')}")
+
+def _get_recent_quarters_results(symbol: str, *, limit: int = 4) -> dict[str, object]:
+    """
+    Return most recent quarterly earnings information for `symbol` using Finnhub.
+    Maintains the AlphaVantage-shaped output keys for downstream compatibility.
+    - fiscal_date            <- Finnhub 'period' (YYYY-MM-DD)
+    - reported_date          <- None (not available from free company-earnings endpoint)
+    - reported_eps           <- Finnhub 'actual'
+    - estimated_eps          <- Finnhub 'estimate'
+    - surprise               <- actual - estimate (computed)
+    - surprise_percentage    <- (actual - estimate)/abs(estimate)*100 (computed)
+    - report_time            <- None (not available from this endpoint)
+    """
     if limit < 1:
         raise ServerError("limit must be >= 1")
 
-    payload = _fetch_alphavantage_earnings(symbol)
-    quarters = payload.get("quarterlyEarnings", [])
-    if not quarters:
-        raise ServerError(f"No quarterly earnings data available for {symbol.upper()}.")
+    earnings = _fetch_finnhub_company_earnings(symbol, limit=limit)
 
-    results: List[Dict[str, object]] = []
-    for entry in quarters[:limit]:
-        result = {
-            "fiscal_date": entry.get("fiscalDateEnding"),
-            "reported_date": entry.get("reportedDate"),
-            "reported_eps": _safe_float(entry.get("reportedEPS")),
-            "estimated_eps": _safe_float(entry.get("estimatedEPS")),
-            "surprise": _safe_float(entry.get("surprise")),
-            "surprise_percentage": _safe_float(entry.get("surprisePercentage")),
-            "report_time": entry.get("reportTime"),
-        }
-        results.append(result)
+    results: list[dict[str, object]] = []
+    for entry in earnings[:limit]:
+        actual = _safe_float(entry.get("actual"))
+        estimate = _safe_float(entry.get("estimate"))
+
+        surprise = None
+        surprise_pct = None
+        if actual is not None and estimate is not None:
+            surprise = actual - estimate
+            if estimate != 0:
+                surprise_pct = (surprise / abs(estimate)) * 100
+
+        results.append(
+            {
+                "fiscal_date": entry.get("period"),
+                "reported_date": None,         # Not available from this free endpoint
+                "reported_eps": actual,
+                "estimated_eps": estimate,
+                "surprise": surprise,
+                "surprise_percentage": surprise_pct,
+                "report_time": None,           # Not available from this free endpoint
+            }
+        )
 
     return {
         "symbol": symbol.upper(),
@@ -233,30 +267,28 @@ def _get_recent_quarters_results(symbol: str, *, limit: int = _DEFAULT_QUARTERS_
     }
 
 
-def _get_recent_quarters_improvement(
-    symbol: str,
-    *,
-    limit: int = _DEFAULT_QUARTERS_LIMIT,
-) -> Dict[str, object]:
-    """Return quarter-over-quarter EPS improvements for ``symbol``."""
-
+def _get_recent_quarters_improvement(symbol: str, *, limit: int = 4) -> dict[str, object]:
+    """
+    Quarter-over-quarter EPS changes using Finnhub 'actual' EPS.
+    Returns `limit-1` comparison rows, newest vs. previous.
+    """
     if limit < 2:
         raise ServerError("limit must be >= 2 to compute quarter-over-quarter changes")
 
-    payload = _fetch_alphavantage_earnings(symbol)
-    quarters = payload.get("quarterlyEarnings", [])
-    if len(quarters) < 2:
+    earnings = _fetch_finnhub_company_earnings(symbol, limit=limit)
+    if len(earnings) < 2:
         raise ServerError(f"Insufficient quarterly data available for {symbol.upper()}.")
 
-    comparisons: List[Dict[str, object]] = []
-    max_index = min(limit, len(quarters))
+    comparisons: list[dict[str, object]] = []
+    max_index = min(limit, len(earnings))
     for idx in range(max_index - 1):
-        current = quarters[idx]
-        previous = quarters[idx + 1]
-        current_eps = _safe_float(current.get("reportedEPS"))
-        previous_eps = _safe_float(previous.get("reportedEPS"))
-        change_percentage: float | None = None
-        absolute_change: float | None = None
+        current = earnings[idx]
+        previous = earnings[idx + 1]
+        current_eps = _safe_float(current.get("actual"))
+        previous_eps = _safe_float(previous.get("actual"))
+
+        absolute_change = None
+        change_percentage = None
         if current_eps is not None and previous_eps is not None:
             absolute_change = current_eps - previous_eps
             if previous_eps != 0:
@@ -264,9 +296,9 @@ def _get_recent_quarters_improvement(
 
         comparisons.append(
             {
-                "fiscal_date": current.get("fiscalDateEnding"),
+                "fiscal_date": current.get("period"),
                 "reported_eps": current_eps,
-                "previous_fiscal_date": previous.get("fiscalDateEnding"),
+                "previous_fiscal_date": previous.get("period"),
                 "previous_reported_eps": previous_eps,
                 "absolute_change": absolute_change,
                 "change_percentage": change_percentage,
@@ -303,6 +335,7 @@ def _handle_invoke(tool: str, arguments: Mapping[str, object]) -> Dict[str, obje
             default_to = from_date + dt.timedelta(days=_DEFAULT_EARNINGS_LOOKAHEAD_DAYS)
             to_date = _parse_date(str(to_value), default=default_to) if to_value else default_to
             result = _fetch_finnhub_calendar(symbol, from_date, to_date)
+
         elif tool == "get_recent_quarters_results":
             symbol = str(arguments.get("symbol", "") or arguments.get("ticker", "")).strip()
             if not symbol:
@@ -314,6 +347,7 @@ def _handle_invoke(tool: str, arguments: Mapping[str, object]) -> Dict[str, obje
                 raise ServerError("'limit' must be an integer") from exc
             limit_int = max(1, min(limit_int, 8))
             result = _get_recent_quarters_results(symbol, limit=limit_int)
+
         elif tool == "get_recent_quarters_improvement":
             symbol = str(arguments.get("symbol", "") or arguments.get("ticker", "")).strip()
             if not symbol:
@@ -325,6 +359,7 @@ def _handle_invoke(tool: str, arguments: Mapping[str, object]) -> Dict[str, obje
                 raise ServerError("'limit' must be an integer") from exc
             limit_int = max(2, min(limit_int, 8))
             result = _get_recent_quarters_improvement(symbol, limit=limit_int)
+
         else:
             LOGGER.warning("Unknown tool requested: %s", tool)
             return {
